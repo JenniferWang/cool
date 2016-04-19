@@ -3,6 +3,7 @@ module Parser where
 import Prelude hiding (id)
 import Text.Parsec
 import Text.Parsec.String(Parser)
+import Text.Parsec.Combinator
 
 import qualified Text.Parsec.Expr as Ex
 import qualified Text.Parsec.Token as Tok
@@ -17,7 +18,7 @@ parseCool :: String -> Either ParseError [Class]
 parseCool = parse program "<stdin>"
 
 program :: Parser [Class]
-program = Tok.whiteSpace lexer *> (many topClass) <* eof
+program = Tok.whiteSpace lexer *> (endBy topClass semi) <* eof
 
 topClass :: Parser Class
 topClass = Class <$> (reserved "class" *> typeId)
@@ -33,46 +34,45 @@ formal = Formal <$> identifier <* colon
 method :: Parser Feature
 method = do
   name <- identifier
-  args <- parens (many formal)
+  args <- parens (commaSep formal)
   tp   <- (colon >> typeId)
   e    <- braces expr
   return $ Method (Formal name tp) args e
 
 field :: Parser Feature
 field = Field <$> formal <*> init
-  where init =  try (Just <$> (reservedOp "<-" *> expr))
-            <|> return Nothing
+  where init =  optionMaybe (reservedOp "<-" *> expr)
 
 feature :: Parser Feature
 feature = try method <|> try field <?> "Class method or field"
 
--- For those which incurs left-recursions, we'd better let this helper method
--- do the job
-binary s = Ex.Infix (reservedOp s >> return (BinaryOp s)) Ex.AssocLeft
-unary s = Ex.Prefix (reservedOp s >> return (UnaryOp s))
+binary s op = Ex.Infix (reservedOp s >> return (BinaryOp op)) Ex.AssocLeft
+unary s op = Ex.Prefix (reservedOp s >> return (UnaryOp op))
 
 -- Table of operators and associativities
-table = [ [ binary "."]
-        , [ unary "~" ]
+table = [ [ Ex.Infix dispatch Ex.AssocLeft                 ]
+        , [ unary "~" Negate                               ]
         , [ Ex.Prefix (reserved "isvoid" >> return IsVoid) ]
-        , [ binary "*", binary "/" ]
-        , [ binary "+", binary "-" ]
-        , [ binary "<", binary "<=", binary "=" ]
-        , [ unary "not" ]
+        , [ binary "*" Multiply, binary "/" Divide         ]
+        , [ binary "+" Plus    , binary "-" Minus          ]
+        , [ binary "<" LessThan, binary "<=" LessEqual
+          , binary "=" Equal                               ]
+        , [ unary "not" Not                                ]
         ]
 
 expr :: Parser Expr
 expr = Ex.buildExpressionParser table factor
 
 factor :: Parser Expr
-factor =  try function
+factor =  try assign
+      <|> try function
       <|> try ifThenElse
       <|> try while
       <|> try block
       <|> try letIn
       <|> try caseOf
       <|> try new
-      <|> try braced
+      <|> try (parens expr)
       <|> try id              -- terminals
       <|> try int
       <|> try boolean
@@ -86,11 +86,11 @@ assign = Assign <$> identifier
 
 -- dispatch operator "." is left associative
 -- like "x.foo().bar() = (x.foo()).bar()"
-dispatch :: Parser Expr
-dispatch =  Dispatch
-        <$> expr <*> maybeType <*> (dot *> identifier) <*> commaSep expr
-  where maybeType =  try (Just <$> (reservedOp "@" *> typeId))
-                 <|> return Nothing
+dispatch :: Parser (Expr -> Expr -> Expr)
+dispatch = try static <|> try regular
+  where
+  static = StaticDispatch <$> (reservedOp "@" *> typeId <* reservedOp ".")
+  regular = do { reservedOp "."; return Dispatch }
 
 function :: Parser Expr
 function =  Function <$> identifier <*> parens (commaSep expr)
@@ -110,7 +110,7 @@ id :: Parser Expr
 id = ID <$> identifier
 
 block :: Parser Expr
-block =  Block <$> braces ( many1 $ expr <* semi)
+block =  Block <$> braces (endBy1 expr semi)
 
 -- Type identifiers start with upper case
 new :: Parser Expr
@@ -121,8 +121,7 @@ letIn = Let <$> (reserved "let" *> many1 clause)
             <*> (reserved "in"  *> expr)
   where clause =  (,) <$> formal <*> maybeExpr
         maybeExpr :: Parser (Maybe Expr)
-        maybeExpr =  try (reservedOp "<-" *> (Just <$> expr))
-                 <|> return Nothing
+        maybeExpr =  optionMaybe (reservedOp "<-" *> expr)
 
 caseOf :: Parser Expr
 caseOf = do
@@ -131,9 +130,6 @@ caseOf = do
   return $ Case e cs
   where clause =  (,) <$> formal <* reservedOp "=>"
                       <*> expr   <* semi
-
-braced :: Parser Expr
-braced = Braced <$> braces expr
 
 int :: Parser Expr
 int = Int <$> integer

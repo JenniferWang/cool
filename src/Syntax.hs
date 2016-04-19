@@ -17,7 +17,8 @@ data Formal = Formal Name Type
 type Args = [Formal]
 
 data Expr = Assign Name Expr
-          | Dispatch Expr (Maybe Type) Name [Expr]
+          | Dispatch Expr Expr
+          | StaticDispatch Type Expr Expr
           | Function Name [Expr]
           | IfThenElse Expr Expr Expr
           | While Expr Expr
@@ -26,15 +27,23 @@ data Expr = Assign Name Expr
           | Case Expr [(Formal, Expr)]
           | New Type
           | IsVoid Expr
-          | BinaryOp String Expr Expr
-          | UnaryOp String Expr
-          | Braced Expr
+          | BinaryOp BOp Expr Expr
+          | UnaryOp UOp Expr
           | ID Name
           | Int Integer
           | String String
           | Boolean Bool
           deriving (Eq, Ord, Show)
 
+data BOp = Plus
+         | Minus
+         | Multiply
+         | Divide
+         | LessThan
+         | LessEqual
+         | Equal
+         deriving (Eq, Ord, Show)
 
-
-
+data UOp = Negate
+         | Not
+         deriving (Eq, Ord, Show)
